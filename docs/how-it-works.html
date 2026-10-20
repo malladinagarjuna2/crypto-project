@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Refractive Cipher — How It Works</title>
+<style>
+  :root {
+    --bg: #0f1420; --panel: #171e2e; --panel2: #1e2740; --text: #e3e8f2; --muted: #9aa6bd;
+    --accent: #5cc8ff; --accent2: #ffb454; --bad: #ff6b6b; --good: #5be49b; --border: #2b3653;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 16px/1.65 "Segoe UI", system-ui, sans-serif; background: var(--bg); color: var(--text); }
+  nav { position: fixed; top: 0; left: 0; bottom: 0; width: 250px; overflow-y: auto; background: var(--panel);
+        border-right: 1px solid var(--border); padding: 20px 14px; font-size: 14px; }
+  nav h2 { font-size: 15px; margin: 0 0 12px; color: var(--accent); }
+  nav a { display: block; color: var(--muted); text-decoration: none; padding: 4px 8px; border-radius: 6px; }
+  nav a:hover { background: var(--panel2); color: var(--text); }
+  main { margin-left: 250px; padding: 30px 48px 80px; max-width: 1050px; }
+  h1 { font-size: 32px; margin: 0 0 6px; }
+  h2 { font-size: 24px; margin: 56px 0 12px; padding-top: 10px; border-top: 1px solid var(--border); color: var(--accent); }
+  h3 { font-size: 18px; margin: 28px 0 8px; color: var(--accent2); }
+  p, li { color: var(--text); }
+  .sub { color: var(--muted); margin-top: 0; }
+  code, .mono { font-family: Consolas, "Cascadia Code", monospace; font-size: 14px; }
+  code { background: var(--panel2); padding: 1px 6px; border-radius: 4px; }
+  pre { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; overflow-x: auto;
+        font-family: Consolas, "Cascadia Code", monospace; font-size: 13.5px; line-height: 1.5; }
+  .math { background: var(--panel); border-left: 3px solid var(--accent); padding: 10px 16px; margin: 12px 0;
+          font-family: "Cambria Math", Cambria, Georgia, serif; font-size: 17px; border-radius: 0 6px 6px 0; }
+  .box { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px 20px; margin: 16px 0; }
+  .warn { border-left: 4px solid var(--bad); }
+  .ok { border-left: 4px solid var(--good); }
+  .note { border-left: 4px solid var(--accent2); }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 14.5px; }
+  th, td { border: 1px solid var(--border); padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--panel2); }
+  tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+  .bad { color: var(--bad); } .good { color: var(--good); } .acc { color: var(--accent); } .acc2 { color: var(--accent2); }
+  canvas { background: #0b0f18; border: 1px solid var(--border); border-radius: 8px; display: block; max-width: 100%; }
+  .controls { display: flex; flex-wrap: wrap; gap: 14px 24px; align-items: center; margin: 10px 0; }
+  .controls label { color: var(--muted); font-size: 14px; }
+  input[type=range] { width: 180px; vertical-align: middle; }
+  input[type=text], input[type=number] { background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+        border-radius: 6px; padding: 5px 8px; font-family: Consolas, monospace; }
+  button { background: var(--accent); color: #04121c; border: 0; border-radius: 6px; padding: 7px 14px; font-weight: 600; cursor: pointer; }
+  button.sec { background: var(--panel2); color: var(--text); border: 1px solid var(--border); }
+  .readout { font-family: Consolas, monospace; font-size: 13.5px; background: var(--panel); border: 1px solid var(--border);
+             border-radius: 8px; padding: 10px 14px; white-space: pre; overflow-x: auto; }
+  .flow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 14px 0; }
+  .flow .n { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-size: 14px; }
+  .flow .a { color: var(--muted); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 900px) { nav { display: none; } main { margin-left: 0; padding: 20px; } .grid2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<nav>
+  <h2>Refractive Cipher</h2>
+  <a href="#idea">1. The big idea</a>
+  <a href="#issues">2. Problems in the original plan</a>
+  <a href="#arch">3. Final architecture</a>
+  <a href="#keys">4. Key schedule</a>
+  <a href="#fixed">5. Q16.16 fixed-point</a>
+  <a href="#chaos">6. Hyperchaos &amp; the crystal</a>
+  <a href="#snell">7. Snell's law &amp; TIR</a>
+  <a href="#crystal">8. Ray tracing a crystal</a>
+  <a href="#feistel">9. Feistel network</a>
+  <a href="#ctr">10. CTR mode + HMAC</a>
+  <a href="#attacks">11. Attack suite</a>
+  <a href="#limits">12. Limitations</a>
+  <a href="#roadmap">13. Build roadmap (C)</a>
+</nav>
+
+<main>
+<h1>The 3D Chaotic Refractive Cipher</h1>
+<p class="sub">A detailed explanation of how the cipher works, what was wrong with the first plan, and how the C implementation will be built.
+Every interactive demo on this page runs locally in your browser.</p>
+
+<div class="box warn">
+<b>Read this first:</b> this is an <i>educational / research</i> cipher. It is a good way to learn about optics, fixed-point math,
+chaos and cryptanalysis. However, nobody can prove a homemade cipher secure by running their own tests on it. Protect real data with
+AES-256-GCM or ChaCha20-Poly1305.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="idea">1. The big idea</h2>
+<p>Picture a glass cube built from thousands of tiny blocks. Each block is made of a different kind of glass, so each one bends light by a different amount.
+The pattern of blocks is the <b>secret</b>. It is grown from your 256-bit key, and only someone holding the key can rebuild the same cube.</p>
+<p>Shine a laser into the cube at a position and angle chosen by your data. The beam bends at every block boundary (<b>refraction</b>).
+It sometimes bounces back off a boundary (<b>total internal reflection</b>) and comes out somewhere unpredictable.
+If you don't know the cube, you can't predict where it comes out. That unpredictability is what we turn into a cipher.</p>
+<div class="flow">
+  <span class="n">secret key</span><span class="a">→</span>
+  <span class="n">grow a secret 3D crystal</span><span class="a">→</span>
+  <span class="n">data picks entry point + angle</span><span class="a">→</span>
+  <span class="n">ray bends / bounces</span><span class="a">→</span>
+  <span class="n">exit state → scrambled bits</span>
+</div>
+<p>On its own, "where the ray comes out" makes a <i>weak</i> cipher (section 2 explains why). So in the final design the ray tracer is just one
+component, a <b>round function</b>, placed inside a well-understood cipher structure (a Feistel network) that guarantees exact decryption
+and spreads every input bit across the whole output.</p>
+
+<!-- ============================================================ -->
+<h2 id="issues">2. Problems found in the original plan</h2>
+<p>The original plan contained good ideas, but several parts would either fail to work or be easy to break. Each problem is listed below with its fix.</p>
+
+<table>
+<tr><th>#</th><th>Problem</th><th>Why it matters</th><th>Fix</th></tr>
+<tr><td>1</td><td><b>Q16.16 range is wrong.</b> The plan says <code>[100000, 241700]</code> stands for 1.00000–2.41700.</td>
+<td>Those are <i>decimal</i>-scaled numbers (×100000). In Q16.16, 1.0 = 65536, so 100000 actually means ≈1.526 and 241700 means ≈3.688.</td>
+<td>Store n in <code>[65536, 158401]</code>, which is 1.0 to 2.417 in Q16.16 (section 5).</td></tr>
+<tr><td>2</td><td><b>Encrypting one byte per ray is a lookup table.</b></td>
+<td>With a fixed key, byte <code>0x41</code> always produces the same exit. There are only 256 possible bytes, so an attacker who can encrypt 256 chosen bytes learns the <i>entire</i> cipher. The chaos in the crystal doesn't help.</td>
+<td>Encrypt 128-bit <b>blocks</b> through a 16-round Feistel network that uses the tracer as its round function (section 9).</td></tr>
+<tr><td>3</td><td><b>Decryption by tracing the ray backwards.</b></td>
+<td>Optical reversibility holds for real numbers. Fixed-point math <i>rounds</i> at every sqrt and every renormalization, so the backward ray drifts off the forward path. Two different inputs can also round to the same exit, and then decryption is impossible.</td>
+<td>A Feistel network can be decrypted exactly <i>even when F cannot be inverted</i>. You run the same F with the round keys in reverse order.</td></tr>
+<tr><td>4</td><td><b>"Snell's law is linear."</b></td>
+<td>It isn't. It involves a square root and a branch (refract vs reflect). The real weakness is #2: the mapping is fixed for a given key and has a tiny input space.</td>
+<td>Keep the S-box, but as extra <i>confusion</i> inside F, not as a cure for "linearity".</td></tr>
+<tr><td>5</td><td><b>The "CBC" step XORs the output with C<sub>i−1</sub> after encryption.</b></td>
+<td>C<sub>i−1</sub> is public, so anyone can XOR it back out. The step adds nothing. With no IV, encrypting the same message twice also gives the same ciphertext.</td>
+<td>Use <b>CTR mode</b> with a random nonce for every message (section 10).</td></tr>
+<tr><td>6</td><td><b>The ciphertext is (x, y, z, θ, φ) for every byte.</b></td>
+<td>That turns 1 byte into about 20 bytes, and it hands the attacker raw geometry about the secret crystal.</td>
+<td>The ray state stays internal and is compressed into output bits. Ciphertext size = message + 12-byte nonce + 32-byte tag.</td></tr>
+<tr><td>7</td><td><b>No integrity check.</b></td>
+<td>An attacker can flip ciphertext bits and the matching plaintext bits silently flip too.</td>
+<td>Encrypt-then-MAC with HMAC-SHA256. The tag is checked before anything is decrypted.</td></tr>
+<tr><td>8</td><td><b>Relying on chaos for security.</b></td>
+<td>Chaotic systems simulated in finite precision eventually fall into short repeating cycles. Many published chaos ciphers have been broken.</td>
+<td>Chaos only <i>shapes</i> the crystal. The secret randomness comes from HKDF-SHA256, which is mixed into every cell.</td></tr>
+<tr><td>9</td><td><b>"Post-quantum guarantees."</b></td>
+<td>Nothing in the design proves this. A 256-bit key gives about 128-bit security against Grover's algorithm, the same as AES-256, and no more.</td>
+<td>Drop the claim.</td></tr>
+<tr><td>10</td><td><b>The SAC test compares "Hello" with "Hello!".</b></td>
+<td>Those differ by an <i>appended byte</i>, not by one bit. "Exactly 50%" is also the wrong target, because random outputs hover <i>around</i> 50%.</td>
+<td>Flip one bit at a time over thousands of trials. Check that the mean is ≈50% with a small spread, and build a per-bit SAC matrix.</td></tr>
+<tr><td>11</td><td><b>Entropy &gt; 7.999 is the pass condition.</b></td>
+<td>Even trivially broken ciphers (an LCG, or XOR with a repeated key on random data) can score that high.</td>
+<td>Add chi-square, serial-correlation and runs tests, and optionally the NIST STS, dieharder or PractRand suites. Treat a pass as a <i>sanity check</i>, not as proof of security.</td></tr>
+<tr><td>12</td><td><b>Data-dependent bounce count.</b></td>
+<td>When the number of steps depends on secret data, the running time leaks it (a timing side channel).</td>
+<td>Use a fixed number of boundary crossings per call, with the refract/reflect choice made by branchless selection.</td></tr>
+<tr><td>13</td><td><b>The tech stack is C++ only</b> (templates, gtest, matplotlib-cpp).</td>
+<td>You want plain C. Your compiler (MinGW GCC 6.3) supports C11 but not C23.</td>
+<td>C11, a Makefile, a small built-in test harness, CSV output with a Python plot script, and no SIMD in version 1.</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="arch">3. Final architecture</h2>
+<pre>
+ 256-bit key ──► HKDF-SHA256 ──┬─► grid seed ──► 4D hyperchaotic map ⊕ HKDF stream ──► crystal N[16][16][16]  (Q16.16)
+                               ├─► S-box seed ──► key-dependent 8-bit permutation
+                               ├─► 16 round keys (64-bit each)
+                               └─► MAC key (256-bit)
+
+ ENCRYPT(message):
+   nonce ← 12 random bytes
+   for each 16-byte block i:
+       keystream_i = FEISTEL16( nonce ‖ counter_i )        ← F = 3D ray tracer
+       C_i         = P_i ⊕ keystream_i
+   tag = HMAC-SHA256(MAC key, nonce ‖ C)
+   output: "RFC1" ‖ nonce ‖ C ‖ tag
+
+ DECRYPT: verify tag first (reject if wrong) → regenerate the same keystream → XOR.
+</pre>
+<p>Notice that with CTR mode, <b>decryption never runs the Feistel network backwards</b>. It just generates the same keystream again.
+The Feistel network is still invertible, and the test suite checks that it is, but CTR mode means we only ever need the forward direction.</p>
+
+<!-- ============================================================ -->
+<h2 id="keys">4. Key schedule (HKDF-SHA256)</h2>
+<p>A single key must never be used directly for several different jobs. We <i>derive</i> independent subkeys from it with
+<b>HKDF</b> (RFC 5869), which is built on HMAC-SHA256:</p>
+<div class="math">
+PRK = HMAC-SHA256(salt = "refcrypt-v1", key)<br>
+OKM = HMAC(PRK, T<sub>0</sub> ‖ info ‖ 0x01) ‖ HMAC(PRK, T<sub>1</sub> ‖ info ‖ 0x02) ‖ …
+</div>
+<p>Each job gets a different <code>info</code> label (<code>"grid"</code>, <code>"sbox"</code>, <code>"round"</code>, <code>"mac"</code>), so the outputs are
+independent. Flipping one key bit changes every subkey completely, because SHA-256 has a strong avalanche effect.
+The original plan said "pass the key through HMAC-SHA256". HKDF is the standard, correct way to do that.</p>
+<p>We write SHA-256, HMAC and HKDF ourselves in C (about 250 lines) and check them against the official test vectors
+(FIPS 180-4, RFC 4231, RFC 5869). That way there's no OpenSSL to install on Windows.</p>
+
+<!-- ============================================================ -->
+<h2 id="fixed">5. Q16.16 fixed-point arithmetic</h2>
+<p>The <code>float</code> and <code>double</code> types round slightly differently depending on the compiler, the optimization flags
+(fused multiply-add, x87 vs SSE) and the CPU. A cipher must produce the <b>exact same bits</b> everywhere, or a file encrypted on one PC
+won't decrypt on another. So we store every real number as an integer that counts units of 1/65536:</p>
+<div class="math">value = stored_int / 65536 &nbsp;&nbsp;&nbsp; (16 integer bits . 16 fractional bits, stored in int32_t)</div>
+<table>
+<tr><th>Real value</th><th>Q16.16 integer</th><th>Hex</th></tr>
+<tr><td>1.0</td><td>65536</td><td>0x00010000</td></tr>
+<tr><td>1.5</td><td>98304</td><td>0x00018000</td></tr>
+<tr><td>2.417 (diamond)</td><td>158401</td><td>0x00026AC1</td></tr>
+<tr><td>0.5</td><td>32768</td><td>0x00008000</td></tr>
+<tr><td>−0.866025</td><td>−56756</td><td>0xFFFF224C</td></tr>
+</table>
+<h3>The operations</h3>
+<pre>
+add:  a + b                               (exact, same as integers)
+mul:  (int32_t)(((int64_t)a * b) >> 16)   e.g. 1.5×1.5: 98304×98304 = 9663676416; >>16 = 147456 = 2.25 ✓
+div:  (int32_t)(((int64_t)a << 16) / b)
+sqrt: integer square root of ((int64_t)a << 16)   (bit-by-bit method, deterministic)
+</pre>
+<p>Every intermediate value goes through <code>int64_t</code> so it can't overflow. Arithmetic shifts of negative numbers are
+implementation-defined in C, so <code>fixed.c</code> handles signs explicitly.</p>
+<div class="controls">
+  <label>Convert a real number: <input type="text" id="fxIn" value="2.417" size="10"></label>
+  <span class="readout" id="fxOut" style="padding:5px 10px"></span>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="chaos">6. The 4D hyperchaotic map &amp; growing the crystal</h2>
+<p>The crystal is shaped by a 4-dimensional hyperchaotic Lorenz-type system:</p>
+<div class="math">
+ẋ = a(y − x) + w<br>
+ẏ = c·x − y − x·z<br>
+ż = x·y − b·z<br>
+ẇ = −y·z + r·w
+</div>
+<p>The parameters often quoted in the literature are a = 10, b = 8/3, c = 28 and r ≈ −1. The C code will check these numerically, because the
+system is only <i>hyper</i>chaotic (two positive Lyapunov exponents) for certain r values. The initial values (x<sub>0</sub>, y<sub>0</sub>, z<sub>0</sub>, w<sub>0</sub>)
+come from the HKDF "grid" output. We integrate with fixed-point Runge-Kutta 4, discard the first 1000 steps as warm-up, and then sample the state.</p>
+<p><b>Sensitivity demo:</b> the two curves below start from initial states that differ by only 10<sup>−10</sup>. They overlap at first, then
+split apart completely. That is the "butterfly effect" the original plan relies on.</p>
+<canvas id="chaosCanvas" width="900" height="300"></canvas>
+<div class="controls">
+  <label>initial difference: 10^<input type="number" id="chaosEps" value="-10" min="-15" max="-1" style="width:60px"></label>
+  <label>r = <input type="number" id="chaosR" value="-1" step="0.1" style="width:70px"></label>
+  <button id="chaosBtn">Re-run</button>
+</div>
+
+<h3>Building each cell</h3>
+<pre>
+for each cell (z, y, x):
+    step the chaotic system k times
+    s   = low 32 bits of (x_state ⊕ w_state)      ← chaotic "shape"
+    h   = next 4 bytes of HKDF("grid")            ← cryptographic randomness
+    u   = s ⊕ h                                   ← even if the chaos cycles, h keeps cells unpredictable
+    N[z][y][x] = 65536 + (u mod 92866)            ← maps into [1.0, 2.417] in Q16.16
+</pre>
+<div class="box note"><b>Why XOR in HKDF bytes?</b> (Issue 8.) Chaotic orbits simulated with fixed-point numbers have a finite number of states, so
+they must eventually repeat, sometimes after only a few thousand steps. XOR-ing in HKDF output means that even if the chaos turns out to be
+weak, the crystal is still as unpredictable as SHA-256 output.</div>
+
+<!-- ============================================================ -->
+<h2 id="snell">7. Snell's law &amp; total internal reflection (vector form)</h2>
+<p>When a ray crosses from glass of index n<sub>1</sub> into glass of index n<sub>2</sub>, it bends according to Snell's law,
+n<sub>1</sub> sin θ<sub>1</sub> = n<sub>2</sub> sin θ<sub>2</sub>. In 3D it is easier and faster to use the <b>vector form</b>, which needs no sin, cos or arcsin:</p>
+<div class="math">
+r = n<sub>1</sub> / n<sub>2</sub>, &nbsp;&nbsp; c<sub>1</sub> = −N·I, &nbsp;&nbsp; k = 1 − r²(1 − c<sub>1</sub>²)<br>
+if k ≥ 0 (refract): &nbsp; R = r·I + (r·c<sub>1</sub> − √k)·N<br>
+if k &lt; 0 (TIR): &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; R = I + 2c<sub>1</sub>·N
+</div>
+<p>Here <b>I</b> is the unit direction of the incoming ray and <b>N</b> is the unit surface normal, pointing back toward the side the ray comes from.
+The crystal is made of cubes, so N is always an axis vector such as (±1,0,0), and the dot product just picks out one component.
+Total internal reflection happens when the ray goes from dense to less dense glass (n<sub>1</sub> &gt; n<sub>2</sub>) at an angle steeper than the
+<b>critical angle</b> θ<sub>c</sub> = arcsin(n<sub>2</sub>/n<sub>1</sub>).</p>
+
+<h3>Worked example</h3>
+<p>n<sub>1</sub> = 1.5, n<sub>2</sub> = 1.0, angle of incidence 30°, interface horizontal, so N = (0, 1) and I = (sin 30°, −cos 30°) = (0.5, −0.8660).</p>
+<pre>
+r  = 1.5 / 1.0                    = 1.5
+c1 = −N·I = −(0·0.5 + 1·(−0.8660)) = 0.8660
+k  = 1 − 1.5² · (1 − 0.8660²)      = 1 − 2.25 · 0.25 = 0.4375   (≥ 0 → refracts)
+√k                                 = 0.6614
+R  = 1.5·(0.5, −0.8660) + (1.5·0.8660 − 0.6614)·(0, 1)
+   = (0.75, −1.2990) + (0, 0.6376) = (0.75, −0.6614)
+|R| = √(0.5625 + 0.4375) = 1  ✓   exit angle = arcsin(0.75) = 48.59°  ✓ (Snell: 1.5·sin30° = 0.75)
+</pre>
+<p>Raise the angle to 50° and you get k = 1 − 2.25·(1 − 0.6428²) = −0.320 &lt; 0, so <b>TIR</b>. The critical angle here is arcsin(1/1.5) = 41.81°.</p>
+
+<h3>Interactive: drag the sliders</h3>
+<canvas id="snellCanvas" width="900" height="380"></canvas>
+<div class="controls">
+  <label>angle θ₁ <input type="range" id="snAng" min="0" max="89" value="30"> <span id="snAngV"></span></label>
+  <label>n₁ (top) <input type="range" id="snN1" min="1000" max="2417" value="1500"> <span id="snN1V"></span></label>
+  <label>n₂ (bottom) <input type="range" id="snN2" min="1000" max="2417" value="1000"> <span id="snN2V"></span></label>
+</div>
+<div class="readout" id="snOut"></div>
+
+<!-- ============================================================ -->
+<h2 id="crystal">8. Tracing a ray through a crystal</h2>
+<p>The real cipher uses a 16×16×16 crystal. To keep the picture readable, this demo uses a <b>16×16 slice in 2D</b>. The demo also uses a toy PRNG instead of HKDF+chaos
+and floating point instead of Q16.16. The ray logic is otherwise the same as the C version:</p>
+<ol>
+  <li><b>Entry:</b> the 16-bit input (already XOR-ed with the round key) chooses the entry column (low byte) and the entry angle (high byte, −60° to +60°).</li>
+  <li><b>Voxel walk (DDA):</b> find the nearest cell boundary along the ray and move to it.</li>
+  <li><b>At the boundary:</b> read n<sub>1</sub> (current cell) and n<sub>2</sub> (next cell), then apply Snell or TIR as in section 7. At the outer walls of the crystal the ray reflects like a mirror.</li>
+  <li><b>S-box mixing:</b> at each crossing, the cell index goes through the key-dependent S-box and is mixed into a running 32-bit accumulator, along with whether the event was a refraction or a TIR.</li>
+  <li><b>Fixed step count:</b> always exactly 32 crossings, so the running time doesn't depend on the data (issue 12).</li>
+  <li><b>Output:</b> the accumulator, final position and final direction are hashed down to the round-function output.</li>
+</ol>
+<canvas id="crystalCanvas" width="900" height="460"></canvas>
+<div class="controls">
+  <label>key: <input type="text" id="crKey" value="my secret key" size="16"></label>
+  <label>input (0–65535): <input type="range" id="crIn" min="0" max="65535" value="12345" style="width:260px"> <span id="crInV" class="mono"></span></label>
+  <button class="sec" id="crPlus">input + 1</button>
+</div>
+<div class="readout" id="crOut"></div>
+<p>Click <b>input + 1</b> a few times. A one-unit change in the input moves the entry point or angle slightly, and after a few boundary crossings the
+path is completely different. Change one character of the key and the whole crystal changes. Blue/white dots are refractions,
+<span class="bad">red</span> dots are total internal reflections and <span class="acc2">orange</span> dots are wall bounces.</p>
+<div class="box note"><b>Being honest about who does what:</b> the optics supply a key-dependent, nonlinear, branching path through secret
+data. Much of the bit-level <i>diffusion</i> comes from the S-box and the final mixing hash. The attack suite (section 11)
+measures how much each part contributes, including a test with the optics disabled.</div>
+
+<!-- ============================================================ -->
+<h2 id="feistel">9. The Feistel network: why decryption is always exact</h2>
+<p>A Feistel network splits a block into a left half L and a right half R and repeats this round:</p>
+<div class="math">L<sub>i+1</sub> = R<sub>i</sub> &nbsp;&nbsp;&nbsp;&nbsp; R<sub>i+1</sub> = L<sub>i</sub> ⊕ F(R<sub>i</sub>, K<sub>i</sub>)</div>
+<svg width="520" height="230" viewBox="0 0 520 230" style="display:block;margin:10px 0">
+  <style>.t{fill:#e3e8f2;font:14px Consolas,monospace}.l{stroke:#9aa6bd;stroke-width:2;fill:none}</style>
+  <defs><marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8z" fill="#9aa6bd"/></marker></defs>
+  <rect x="40" y="10" width="120" height="34" rx="6" fill="#1e2740" stroke="#2b3653"/><text class="t" x="88" y="32">Lᵢ</text>
+  <rect x="360" y="10" width="120" height="34" rx="6" fill="#1e2740" stroke="#2b3653"/><text class="t" x="408" y="32">Rᵢ</text>
+  <rect x="215" y="80" width="90" height="40" rx="6" fill="#123247" stroke="#5cc8ff"/><text class="t" x="232" y="105">F(·,Kᵢ)</text>
+  <circle cx="100" cy="100" r="13" fill="none" stroke="#ffb454" stroke-width="2"/><text class="t" x="94" y="105" style="fill:#ffb454">⊕</text>
+  <path class="l" d="M100,44 L100,85" marker-end="url(#ar)"/>
+  <path class="l" d="M420,44 L420,100 L307,100" marker-end="url(#ar)"/>
+  <path class="l" d="M215,100 L115,100" marker-end="url(#ar)"/>
+  <path class="l" d="M100,113 L100,150 L420,185" marker-end="url(#ar)"/>
+  <path class="l" d="M420,100 L420,130 L100,185" marker-end="url(#ar)"/>
+  <rect x="40" y="188" width="120" height="34" rx="6" fill="#1e2740" stroke="#2b3653"/><text class="t" x="80" y="210">Lᵢ₊₁</text>
+  <rect x="360" y="188" width="120" height="34" rx="6" fill="#1e2740" stroke="#2b3653"/><text class="t" x="400" y="210">Rᵢ₊₁</text>
+</svg>
+<p>Here's the key trick. Given the outputs (L<sub>i+1</sub>, R<sub>i+1</sub>), we can recover the inputs:</p>
+<div class="math">R<sub>i</sub> = L<sub>i+1</sub> &nbsp;&nbsp;&nbsp;&nbsp; L<sub>i</sub> = R<sub>i+1</sub> ⊕ F(L<sub>i+1</sub>, K<sub>i</sub>)</div>
+<p>Decryption only ever calls F <b>forwards</b>, on a value we already have. F doesn't need to be invertible, so it can
+round, branch, collapse two inputs into one, or do anything else. That is why the fixed-point ray tracer can serve as F, even though
+tracing it backwards would fail (issue 3). This is the same structure DES used, and Luby and Rackoff proved that with 4 or more rounds of a
+good pseudorandom F it gives a pseudorandom permutation. We use 16 rounds for a safety margin.</p>
+
+<h3>Interactive toy Feistel (32-bit block, 16 rounds, F = the crystal tracer above)</h3>
+<div class="controls">
+  <label>plaintext block (8 hex digits): <input type="text" id="feIn" value="48656C6C" size="10"></label>
+  <button id="feBtn">Encrypt → Decrypt</button>
+  <button class="sec" id="feFlip">Flip 1 random input bit</button>
+  <button class="sec" id="feSac">Run SAC: 2000 trials</button>
+</div>
+<div class="readout" id="feOut" style="max-height:470px;overflow-y:auto"></div>
+
+<!-- ============================================================ -->
+<h2 id="ctr">10. CTR mode + HMAC (how real files get encrypted)</h2>
+<p>A block cipher on its own handles only 16 bytes, and it always maps the same input to the same output. A <b>mode of operation</b> fixes both problems:</p>
+<pre>
+nonce (12 random bytes, new for EVERY message)
+
+block 0:  FEISTEL16( nonce ‖ 00000000 ) ──► keystream₀ ──⊕── P₀ ──► C₀
+block 1:  FEISTEL16( nonce ‖ 00000001 ) ──► keystream₁ ──⊕── P₁ ──► C₁
+block 2:  FEISTEL16( nonce ‖ 00000002 ) ──► keystream₂ ──⊕── P₂ ──► C₂   (last block may be partial: no padding needed)
+
+tag = HMAC-SHA256( mac_key, "RFC1" ‖ nonce ‖ C₀ ‖ C₁ ‖ … )
+</pre>
+<ul>
+  <li><b>Why the nonce:</b> encrypting the same file twice gives completely different ciphertexts, so an attacker can't tell that two messages are identical.
+      <span class="bad">Never reuse a nonce with the same key.</span> If you do, C ⊕ C′ = P ⊕ P′ and the keystream cancels out.</li>
+  <li><b>Why HMAC (encrypt-then-MAC):</b> without it, flipping bit j of the ciphertext flips bit j of the decrypted plaintext, and nobody notices.
+      With HMAC, decryption first recomputes the tag. If even one bit was altered, it refuses to output anything. The comparison runs in constant time.</li>
+  <li><b>Why a separate MAC key:</b> HKDF gives the MAC its own key, so a weakness in the ray-tracing part can't be turned against the authentication.</li>
+</ul>
+<p>File format: <code>"RFC1" (4 bytes) ‖ nonce (12) ‖ ciphertext (same length as the plaintext) ‖ tag (32)</code>, so the overhead is a fixed 48 bytes.</p>
+
+<!-- ============================================================ -->
+<h2 id="attacks">11. The automated attack suite</h2>
+<p>A second program, <code>attack.exe</code>, tries to break the cipher. Each test targets a specific weakness:</p>
+
+<h3>11.1 Strict Avalanche Criterion (SAC) / differential test</h3>
+<p>Pick a random block X. For each input bit i, flip it to get X′, then compare E(X) with E(X′).
+If the cipher is good, <i>every</i> output bit j flips with probability ½, independently of i.</p>
+<ul>
+  <li><b>Mean avalanche</b> over thousands of trials should be ≈ 50% (for 128-bit blocks, about 64 ± 5.7 bits per trial).</li>
+  <li><b>SAC matrix</b> M[i][j] = fraction of trials where flipping input bit i flipped output bit j. Every entry should be ≈ 0.5.
+      A cell near 0 or 1 is a <i>differential characteristic</i>, a crack an attacker can use.</li>
+  <li>We run this on F alone, on 1, 2, 4 and 16 Feistel rounds, and on key bits as well as plaintext bits. This shows <i>how many rounds</i> it takes to reach full diffusion.</li>
+</ul>
+
+<h3>11.2 Impulse-response / linearity test</h3>
+<p>Encrypt the all-zero block and every "single 1-bit" block (0x…01, 0x…02, …). If the cipher were linear over GF(2), then
+E(a ⊕ b) = E(a) ⊕ E(b) ⊕ E(0) would hold, and the 128 impulse responses would describe the whole cipher.
+The test checks this equation on random pairs (a, b). For a nonlinear cipher it should hold about as often as chance, roughly 2<sup>−128</sup>, which in practice means never.</p>
+
+<h3>11.3 Known-plaintext codebook attack (proving the redesign was needed)</h3>
+<p>We deliberately build the <b>original</b> design (one byte per ray, no Feistel, no nonce), encrypt all 256 bytes once,
+and record a table. With that table the attack decrypts any message encrypted under the same key. This attack <span class="good">must succeed</span> against the
+weak variant and <span class="bad">must fail</span> against the real cipher. Showing that both happen is how we know the attack suite actually works.</p>
+
+<h3>11.4 Statistical tests on 10 MB of output</h3>
+<table>
+<tr><th>Test</th><th>Formula</th><th>Expected for good output</th></tr>
+<tr><td>Shannon entropy</td><td>H = −Σ p(x) log₂ p(x) over the 256 byte values</td><td>&gt; 7.9999 for 10 MB (the maximum is 8)</td></tr>
+<tr><td>Chi-square</td><td>χ² = Σ (Oₓ − E)² / E, with E = N/256 and 255 degrees of freedom</td><td>χ² ≈ 255 ± 23, p-value between 0.01 and 0.99</td></tr>
+<tr><td>Serial correlation</td><td>correlation between byte k and byte k+1</td><td>≈ 0 (|ρ| &lt; 0.001)</td></tr>
+<tr><td>Runs test</td><td>number of runs of identical bits compared with the expected count</td><td>z-score within ±3</td></tr>
+<tr><td>Key sensitivity</td><td>encrypt the same file with keys that differ by one bit</td><td>≈ 50% of ciphertext bits differ</td></tr>
+</table>
+<p>To feed external suites (NIST STS, dieharder, PractRand), the C program can also write raw keystream to a file or to stdout.</p>
+<div class="box warn"><b>Passing all of these does not make the cipher secure.</b> These tests catch <i>obvious</i> flaws. Real cryptanalysis
+(linear and differential trails, related-key, slide and algebraic attacks) needs expert review over many years. That is why AES
+and ChaCha20 are trusted and new designs are not.</div>
+
+<!-- ============================================================ -->
+<h2 id="limits">12. Limitations &amp; honest caveats</h2>
+<ul>
+  <li><b>Speed:</b> one call to F is a 32-step voxel walk with fixed-point sqrt, and there are 16 rounds per block. Expect this to be 100–1000× slower than AES. That's fine for learning, but not for bulk data.</li>
+  <li><b>Side channels:</b> cache timing from table lookups (the S-box and grid reads depend on secret data) is <i>not</i> eliminated.</li>
+  <li><b>The chaos map is decorative for security</b>, because HKDF provides the real randomness. It still makes the crystal structure interesting, and it can be analysed on its own (cycle length, Lyapunov exponents).</li>
+  <li><b>No security proof</b>, and no third-party analysis.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="roadmap">13. Build roadmap (C11, MinGW GCC)</h2>
+<pre>
+crypto/
+├── Makefile                 make → refcrypt.exe, attack.exe, tests.exe  (-std=c11 -O2 -Wall -Wextra)
+├── docs/how-it-works.html   ← this file
+├── include/  src/
+│   ├── fixed.[ch]           Q16.16 type, mul/div via int64_t, integer sqrt
+│   ├── sha256.[ch] hmac.[ch] hkdf.[ch]    verified against FIPS / RFC test vectors
+│   ├── chaos.[ch]           4D hyperchaotic system, fixed-point RK4
+│   ├── grid.[ch]            16×16×16 crystal, n ∈ [65536, 158401]
+│   ├── sbox.[ch]            key-dependent Fisher–Yates permutation
+│   ├── raytrace.[ch]        3D DDA walk, Snell / TIR vector form, fixed step count
+│   ├── feistel.[ch]         16-round Feistel, 128-bit block, F = raytrace
+│   ├── mode.[ch]            CTR + encrypt-then-MAC, file format
+│   ├── rng.[ch]             nonce from BCryptGenRandom (Windows)
+│   └── main.c               refcrypt enc|dec|trace
+├── attack/                  sac.c impulse.c stats.c known_plaintext.c attack_main.c
+├── tests/test_main.c        vectors, round-trips, tamper rejection, determinism
+└── tools/plot_ray.py        3D plot of a traced ray (matplotlib)
+</pre>
+<table>
+<tr><th>Phase</th><th>Deliverable</th><th>Done when…</th></tr>
+<tr><td>1</td><td>Fixed-point math, SHA-256, HMAC, HKDF</td><td>all official test vectors pass</td></tr>
+<tr><td>2</td><td>Chaos map, crystal, S-box</td><td>same key → same crystal hash; 1 key bit flipped → ≈50% of crystal bytes differ</td></tr>
+<tr><td>3</td><td>3D ray tracer</td><td>normal incidence goes straight; above the critical angle → TIR; |direction| stays ≈ 1</td></tr>
+<tr><td>4</td><td>Feistel + CTR + HMAC + CLI</td><td>encrypt → decrypt gives a byte-identical file; a tampered file is rejected</td></tr>
+<tr><td>5</td><td>Attack suite</td><td>SAC ≈ 50%, entropy &gt; 7.999, χ² p-value OK, codebook attack breaks the weak variant only</td></tr>
+</table>
+<p class="sub">End of document.</p>
+</main>
+
+<script>
+"use strict";
+// ---------- helpers ----------
+function mix32(x) {
+  x = x >>> 0;
+  x ^= x >>> 16; x = Math.imul(x, 0x7feb352d);
+  x ^= x >>> 15; x = Math.imul(x, 0x846ca68b);
+  x ^= x >>> 16; return x >>> 0;
+}
+function hashStr(s) {           // FNV-1a, toy only
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return h >>> 0;
+}
+function makePrng(seed) {        // splitmix-style, toy stand-in for HKDF
+  let st = seed >>> 0;
+  return () => { st = (st + 0x9E3779B9) >>> 0; return mix32(st); };
+}
+const hex = (v, d) => (v >>> 0).toString(16).toUpperCase().padStart(d, "0");
+const popcount = v => { v = v >>> 0; let c = 0; while (v) { v &= v - 1; c++; } return c; };
+
+// ---------- 5. fixed-point converter ----------
+(function () {
+  const inp = document.getElementById("fxIn"), out = document.getElementById("fxOut");
+  function upd() {
+    const v = parseFloat(inp.value);
+    if (!isFinite(v)) { out.textContent = "not a number"; return; }
+    const q = Math.round(v * 65536);
+    if (q > 2147483647 || q < -2147483648) { out.textContent = "out of Q16.16 range (±32768)"; return; }
+    out.textContent = `Q16.16 = ${q}   hex = 0x${hex(q, 8)}   back to real = ${(q / 65536).toFixed(6)}   ` +
+                      `(if read as ×100000 decimal it would be ${(q / 100000).toFixed(5)})`;
+  }
+  inp.addEventListener("input", upd); upd();
+})();
+
+// ---------- 6. chaos ----------
+(function () {
+  const cv = document.getElementById("chaosCanvas"), g = cv.getContext("2d");
+  function deriv(s, p) {
+    const [x, y, z, w] = s;
+    return [p.a * (y - x) + w, p.c * x - y - x * z, x * y - p.b * z, -y * z + p.r * w];
+  }
+  function rk4(s, p, h) {
+    const k1 = deriv(s, p);
+    const k2 = deriv(s.map((v, i) => v + h / 2 * k1[i]), p);
+    const k3 = deriv(s.map((v, i) => v + h / 2 * k2[i]), p);
+    const k4 = deriv(s.map((v, i) => v + h * k3[i]), p);
+    return s.map((v, i) => v + h / 6 * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]));
+  }
+  function run() {
+    const eps = Math.pow(10, parseFloat(document.getElementById("chaosEps").value));
+    const p = { a: 10, b: 8 / 3, c: 28, r: parseFloat(document.getElementById("chaosR").value) };
+    let s1 = [1, 1, 1, 1], s2 = [1 + eps, 1, 1, 1];
+    const N = 8000, h = 0.004, xs1 = [], xs2 = [], dl = [];
+    for (let i = 0; i < N; i++) {
+      s1 = rk4(s1, p, h); s2 = rk4(s2, p, h);
+      xs1.push(s1[0]); xs2.push(s2[0]);
+      const d = Math.hypot(s1[0] - s2[0], s1[1] - s2[1], s1[2] - s2[2], s1[3] - s2[3]);
+      dl.push(Math.log10(Math.max(d, 1e-16)));
+    }
+    const W = cv.width, H = cv.height, top = 190;
+    g.clearRect(0, 0, W, H);
+    let mx = 1; xs1.concat(xs2).forEach(v => { if (isFinite(v)) mx = Math.max(mx, Math.abs(v)); });
+    if (!isFinite(mx) || mx > 1e6) { g.fillStyle = "#ff6b6b"; g.font = "15px Segoe UI"; g.fillText("Diverged to infinity for this r: try another value", 20, 40); return; }
+    const plot = (arr, col, y0, hh, lo, hi) => {
+      g.strokeStyle = col; g.lineWidth = 1.2; g.beginPath();
+      arr.forEach((v, i) => { const X = 50 + i / N * (W - 60), Y = y0 + hh - (v - lo) / (hi - lo) * hh; i ? g.lineTo(X, Y) : g.moveTo(X, Y); });
+      g.stroke();
+    };
+    plot(xs1, "#5cc8ff", 10, top - 20, -mx, mx);
+    plot(xs2, "#ffb454", 10, top - 20, -mx, mx);
+    plot(dl, "#5be49b", top + 10, H - top - 20, -16, 3);
+    g.fillStyle = "#9aa6bd"; g.font = "12px Segoe UI";
+    g.fillText("x(t): trajectory A (blue) vs B (orange)", 55, 22);
+    g.fillText("log10 |A − B|  (green): grows linearly = exponential divergence", 55, top + 22);
+    g.fillText("time →", W - 60, H - 4);
+  }
+  document.getElementById("chaosBtn").addEventListener("click", run); run();
+})();
+
+// ---------- 7. Snell ----------
+(function () {
+  const cv = document.getElementById("snellCanvas"), g = cv.getContext("2d");
+  const A = document.getElementById("snAng"), N1 = document.getElementById("snN1"), N2 = document.getElementById("snN2");
+  const out = document.getElementById("snOut");
+  function arrow(x1, y1, x2, y2, col, w, dash) {
+    g.strokeStyle = col; g.fillStyle = col; g.lineWidth = w; g.setLineDash(dash || []);
+    g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke(); g.setLineDash([]);
+    const ang = Math.atan2(y2 - y1, x2 - x1);
+    g.beginPath(); g.moveTo(x2, y2);
+    g.lineTo(x2 - 12 * Math.cos(ang - 0.35), y2 - 12 * Math.sin(ang - 0.35));
+    g.lineTo(x2 - 12 * Math.cos(ang + 0.35), y2 - 12 * Math.sin(ang + 0.35)); g.fill();
+  }
+  function draw() {
+    const th = +A.value * Math.PI / 180, n1 = N1.value / 1000, n2 = N2.value / 1000;
+    document.getElementById("snAngV").textContent = A.value + "°";
+    document.getElementById("snN1V").textContent = n1.toFixed(3);
+    document.getElementById("snN2V").textContent = n2.toFixed(3);
+    const W = cv.width, H = cv.height, cx = W / 2, cy = H / 2, L = 165;
+    g.clearRect(0, 0, W, H);
+    const shade = n => `rgba(92,200,255,${0.05 + (n - 1) / 1.417 * 0.35})`;
+    g.fillStyle = shade(n1); g.fillRect(0, 0, W, cy);
+    g.fillStyle = shade(n2); g.fillRect(0, cy, W, H - cy);
+    g.strokeStyle = "#5cc8ff"; g.lineWidth = 2; g.beginPath(); g.moveTo(0, cy); g.lineTo(W, cy); g.stroke();
+    g.setLineDash([5, 5]); g.strokeStyle = "#9aa6bd"; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(cx, 10); g.lineTo(cx, H - 10); g.stroke(); g.setLineDash([]);
+    g.fillStyle = "#e3e8f2"; g.font = "14px Segoe UI";
+    g.fillText("n₁ = " + n1.toFixed(3), 16, 26); g.fillText("n₂ = " + n2.toFixed(3), 16, H - 14);
+    g.fillText("normal N", cx + 6, 22);
+    // vector math (y up): I = (sinθ, -cosθ), N = (0,1)
+    const I = [Math.sin(th), -Math.cos(th)], r = n1 / n2, c1 = Math.cos(th);
+    const k = 1 - r * r * (1 - c1 * c1);
+    arrow(cx - L * Math.sin(th), cy - L * Math.cos(th), cx, cy, "#ffffff", 3);
+    let txt = `I = (${I[0].toFixed(4)}, ${I[1].toFixed(4)})   N = (0, 1)\n` +
+              `r = n1/n2 = ${r.toFixed(4)}   c1 = -N·I = ${c1.toFixed(4)}\n` +
+              `k = 1 - r²(1 - c1²) = ${k.toFixed(4)}\n`;
+    const crit = n1 > n2 ? (Math.asin(n2 / n1) * 180 / Math.PI).toFixed(2) + "°" : "none (n1 ≤ n2: TIR impossible)";
+    if (k >= 0) {
+      const c2 = Math.sqrt(k), f = r * c1 - c2;
+      const R = [r * I[0], r * I[1] + f];
+      const th2 = Math.asin(Math.min(1, Math.abs(R[0])));
+      arrow(cx, cy, cx + L * Math.sin(th2), cy + L * Math.cos(th2), "#5be49b", 3);
+      arrow(cx, cy, cx + L * 0.6 * Math.sin(th), cy - L * 0.6 * Math.cos(th), "rgba(255,180,84,0.35)", 1.5, [4, 4]);
+      g.fillStyle = "#5be49b"; g.fillText("refracted  θ₂ = " + (th2 * 180 / Math.PI).toFixed(2) + "°", cx + 20, cy + 40);
+      txt += `k ≥ 0 → REFRACT   √k = ${c2.toFixed(4)}\n` +
+             `R = r·I + (r·c1 − √k)·N = (${R[0].toFixed(4)}, ${R[1].toFixed(4)})   |R| = ${Math.hypot(R[0], R[1]).toFixed(6)}\n` +
+             `θ2 = ${(th2 * 180 / Math.PI).toFixed(2)}°   check Snell: n1·sinθ1 = ${(n1 * Math.sin(th)).toFixed(4)}, n2·sinθ2 = ${(n2 * Math.sin(th2)).toFixed(4)}\n`;
+    } else {
+      const R = [I[0], I[1] + 2 * c1];
+      arrow(cx, cy, cx + L * Math.sin(th), cy - L * Math.cos(th), "#ff6b6b", 3);
+      g.fillStyle = "#ff6b6b"; g.fillText("TOTAL INTERNAL REFLECTION", cx + 20, cy - 30);
+      txt += `k < 0 → TIR   R = I + 2·c1·N = (${R[0].toFixed(4)}, ${R[1].toFixed(4)})\n`;
+    }
+    txt += `critical angle = ${crit}\n` +
+           `Q16.16: n1 = ${Math.round(n1 * 65536)}, n2 = ${Math.round(n2 * 65536)}, c1 = ${Math.round(c1 * 65536)}, k = ${Math.round(k * 65536)}`;
+    out.textContent = txt;
+  }
+  [A, N1, N2].forEach(e => e.addEventListener("input", draw)); draw();
+})();
+
+// ---------- 8. toy 2D crystal + tracer (shared by Feistel demo) ----------
+const G = 16, STEPS = 32;
+function buildKey(keyStr) {
+  const rnd = makePrng(hashStr(keyStr));
+  const grid = [];
+  for (let y = 0; y < G; y++) { grid.push([]); for (let x = 0; x < G; x++) grid[y].push(1 + (rnd() / 4294967296) * 1.417); }
+  const sbox = Array.from({ length: 256 }, (_, i) => i);
+  for (let i = 255; i > 0; i--) { const j = rnd() % (i + 1); [sbox[i], sbox[j]] = [sbox[j], sbox[i]]; }
+  const rk = []; for (let i = 0; i < 16; i++) rk.push(rnd() & 0xFFFF);
+  return { grid, sbox, rk };
+}
+function trace(K, v16, rk16, record) {
+  const v = (v16 ^ rk16) & 0xFFFF;
+  let px = ((v & 0xFF) + 0.5) / 256 * G, py = 1e-6;
+  let cx = Math.min(G - 1, Math.floor(px)), cy = 0;
+  const ang = (((v >>> 8) / 255) - 0.5) * 2 * (60 * Math.PI / 180);
+  let dx = Math.sin(ang), dy = Math.cos(ang);
+  let acc = (0x9E3779B9 ^ (rk16 * 0x10001)) >>> 0;
+  const path = record ? [{ x: px, y: py, k: "start" }] : null;
+  let tirs = 0, refr = 0, walls = 0;
+  for (let s = 0; s < STEPS; s++) {
+    const tx = dx > 1e-12 ? (cx + 1 - px) / dx : dx < -1e-12 ? (cx - px) / dx : Infinity;
+    const ty = dy > 1e-12 ? (cy + 1 - py) / dy : dy < -1e-12 ? (cy - py) / dy : Infinity;
+    const alongX = tx <= ty, t = Math.max(0, alongX ? tx : ty);
+    px += dx * t; py += dy * t;
+    let nx = cx, ny = cy;
+    if (alongX) nx += dx > 0 ? 1 : -1; else ny += dy > 0 ? 1 : -1;
+    let kind;
+    if (nx < 0 || nx >= G || ny < 0 || ny >= G) {           // outer wall: mirror
+      if (alongX) dx = -dx; else dy = -dy;
+      kind = 2; walls++;
+    } else {
+      const n1 = K.grid[cy][cx], n2 = K.grid[ny][nx], r = n1 / n2;
+      // normal points back toward the incoming side
+      const Nx = alongX ? (dx > 0 ? -1 : 1) : 0, Ny = alongX ? 0 : (dy > 0 ? -1 : 1);
+      const c1 = -(Nx * dx + Ny * dy), k = 1 - r * r * (1 - c1 * c1);
+      if (k < 0) { dx += 2 * c1 * Nx; dy += 2 * c1 * Ny; kind = 1; tirs++; }
+      else {
+        const f = r * c1 - Math.sqrt(k);
+        dx = r * dx + f * Nx; dy = r * dy + f * Ny;
+        cx = nx; cy = ny; kind = 0; refr++;
+      }
+      const m = Math.hypot(dx, dy); dx /= m; dy /= m;
+    }
+    acc = mix32(acc ^ K.sbox[(cy * G + cx) & 255] ^ (s << 8) ^ (kind << 16) ^ Math.imul(acc, 31));
+    if (record) path.push({ x: px, y: py, k: ["refract", "tir", "wall"][kind] });
+  }
+  const q = Math.floor(px * 4096) ^ (Math.floor(py * 4096) << 12) ^ (Math.floor((dx + 1) * 2048) << 20);
+  const out = mix32(acc ^ q) & 0xFFFF;
+  return { out, path, tirs, refr, walls };
+}
+
+(function () {
+  const cv = document.getElementById("crystalCanvas"), g = cv.getContext("2d");
+  const keyI = document.getElementById("crKey"), inI = document.getElementById("crIn"), out = document.getElementById("crOut");
+  function draw() {
+    const K = buildKey(keyI.value), v = +inI.value;
+    document.getElementById("crInV").textContent = v + " (0x" + hex(v, 4) + ")";
+    const res = trace(K, v, 0, true);
+    const S = 26, ox = 20, oy = 20;
+    g.clearRect(0, 0, cv.width, cv.height);
+    for (let y = 0; y < G; y++) for (let x = 0; x < G; x++) {
+      const t = (K.grid[y][x] - 1) / 1.417;
+      g.fillStyle = `hsl(205, 55%, ${80 - t * 62}%)`;
+      g.fillRect(ox + x * S, oy + y * S, S - 1, S - 1);
+    }
+    g.strokeStyle = "#ffe066"; g.lineWidth = 2; g.beginPath();
+    res.path.forEach((p, i) => { const X = ox + p.x * S, Y = oy + p.y * S; i ? g.lineTo(X, Y) : g.moveTo(X, Y); });
+    g.stroke();
+    res.path.forEach(p => {
+      const col = p.k === "tir" ? "#ff4d4d" : p.k === "wall" ? "#ffb454" : p.k === "start" ? "#5be49b" : "#ffffff";
+      g.fillStyle = col; g.beginPath(); g.arc(ox + p.x * S, oy + p.y * S, p.k === "start" ? 6 : 3.5, 0, 7); g.fill();
+    });
+    // legend
+    const lx = ox + G * S + 30; g.font = "13px Segoe UI";
+    for (let i = 0; i <= 10; i++) { g.fillStyle = `hsl(205,55%,${80 - i / 10 * 62}%)`; g.fillRect(lx, 30 + i * 18, 22, 17); }
+    g.fillStyle = "#e3e8f2"; g.fillText("n = 1.000 (light)", lx + 30, 43); g.fillText("n = 2.417 (dense)", lx + 30, 223);
+    [["start", "#5be49b"], ["refraction", "#ffffff"], ["total internal reflection", "#ff4d4d"], ["wall mirror", "#ffb454"]]
+      .forEach(([t, c], i) => { g.fillStyle = c; g.beginPath(); g.arc(lx + 8, 270 + i * 24, 5, 0, 7); g.fill(); g.fillStyle = "#e3e8f2"; g.fillText(t, lx + 22, 275 + i * 24); });
+    out.textContent = `key hash = 0x${hex(hashStr(keyI.value), 8)}   input = 0x${hex(v, 4)}   entry column byte = ${v & 0xFF}, angle byte = ${v >>> 8}\n` +
+                      `${STEPS} boundary events: ${res.refr} refractions, ${res.tirs} TIR, ${res.walls} wall bounces\n` +
+                      `F output (16 bits) = 0x${hex(res.out, 4)}`;
+  }
+  keyI.addEventListener("input", draw); inI.addEventListener("input", draw);
+  document.getElementById("crPlus").addEventListener("click", () => { inI.value = (+inI.value + 1) & 0xFFFF; draw(); });
+  draw();
+})();
+
+// ---------- 9. toy Feistel ----------
+(function () {
+  const inI = document.getElementById("feIn"), out = document.getElementById("feOut");
+  const F = (K, x, i) => trace(K, x, K.rk[i], false).out;
+  function enc(K, b) {
+    let L = b >>> 16, R = b & 0xFFFF; const rows = [];
+    for (let i = 0; i < 16; i++) { const f = F(K, R, i); rows.push([i, L, R, f]); [L, R] = [R, (L ^ f) & 0xFFFF]; }
+    return { c: ((L << 16) | R) >>> 0, rows };
+  }
+  function dec(K, c) {
+    let L = c >>> 16, R = c & 0xFFFF;
+    for (let i = 15; i >= 0; i--) { const f = F(K, L, i); [L, R] = [(R ^ f) & 0xFFFF, L]; }
+    return ((L << 16) | R) >>> 0;
+  }
+  const key = () => buildKey(document.getElementById("crKey").value);
+  function parse() { const v = parseInt(inI.value, 16); return isFinite(v) ? v >>> 0 : 0; }
+  function run(extra) {
+    const K = key(), p = parse(), e = enc(K, p), d = dec(K, e.c);
+    let t = `key = "${document.getElementById("crKey").value}" (shared with section 8)\n\n` +
+            `round   L      R      F(R,K_i)  → new L = R, new R = L ⊕ F\n`;
+    e.rows.forEach(([i, L, R, f]) => t += `  ${String(i).padStart(2)}    ${hex(L, 4)}   ${hex(R, 4)}   ${hex(f, 4)}\n`);
+    t += `\nplaintext  = 0x${hex(p, 8)}\nciphertext = 0x${hex(e.c, 8)}\ndecrypted  = 0x${hex(d, 8)}  ` +
+         (d === p ? "✓ exact match (F was only ever run forwards)" : "✗ MISMATCH");
+    out.textContent = t + (extra || "");
+  }
+  document.getElementById("feBtn").addEventListener("click", () => run());
+  document.getElementById("feFlip").addEventListener("click", () => {
+    const K = key(), p = parse(), bit = Math.floor(Math.random() * 32), p2 = (p ^ (1 << bit)) >>> 0;
+    const c1 = enc(K, p).c, c2 = enc(K, p2).c, diff = popcount(c1 ^ c2);
+    inI.value = hex(p2, 8);
+    run(`\n\nflipped input bit ${bit}: previous ciphertext 0x${hex(c1, 8)} → 0x${hex(c2, 8)}\n` +
+        `ciphertext bits changed: ${diff} / 32  (${(diff / 32 * 100).toFixed(1)}%, ideal ≈ 50%)`);
+  });
+  document.getElementById("feSac").addEventListener("click", () => {
+    const K = key(), T = 2000; let sum = 0, sumsq = 0;
+    const perOut = new Array(32).fill(0);
+    for (let n = 0; n < T; n++) {
+      const p = (Math.random() * 4294967296) >>> 0, bit = Math.floor(Math.random() * 32);
+      const d = (enc(K, p).c ^ enc(K, (p ^ (1 << bit)) >>> 0).c) >>> 0, c = popcount(d);
+      sum += c; sumsq += c * c;
+      for (let j = 0; j < 32; j++) if (d >>> j & 1) perOut[j]++;
+    }
+    const mean = sum / T, sd = Math.sqrt(sumsq / T - mean * mean);
+    const lo = Math.min(...perOut) / T, hi = Math.max(...perOut) / T;
+    run(`\n\nSAC over ${T} random single-bit flips:\n` +
+        `  mean bits changed = ${mean.toFixed(2)} / 32 = ${(mean / 32 * 100).toFixed(2)}%   (ideal 16.00 = 50%)\n` +
+        `  std deviation     = ${sd.toFixed(2)}   (ideal for random: √(32/4) = 2.83)\n` +
+        `  per-output-bit flip rate: min ${(lo * 100).toFixed(1)}%, max ${(hi * 100).toFixed(1)}%   (ideal: all ≈ 50%)`);
+  });
+  run();
+})();
+</script>
+</body>
+</html>
