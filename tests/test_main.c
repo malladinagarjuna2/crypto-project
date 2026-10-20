@@ -10,6 +10,7 @@
 #include "chaos.h"
 #include "grid.h"
 #include "sbox.h"
+#include "raytrace.h"
 
 static int g_fail = 0, g_pass = 0;
 
@@ -250,6 +251,100 @@ static void test_key_schedule(void)
     }
 }
 
+/* ---------------- Phase 3: ray tracer ---------------- */
+static int near(fx_t got, double want, double tol)
+{
+    double g = got / 65536.0;
+    return g > want - tol && g < want + tol;
+}
+
+static void test_boundary_physics(void)
+{
+    const double s30 = 0.5, c30 = 0.8660254, s50 = 0.7660444, c50 = 0.6427876;
+    fx_t d[3];
+    int ev;
+
+    /* normal incidence: passes straight through, no bending */
+    d[0] = 0; d[1] = 0; d[2] = FX_ONE;
+    ev = rt_boundary(d, 2, FX_CONST(1.5), FX_CONST(1.0));
+    CHECK(ev == RT_REFRACT && d[0] == 0 && d[1] == 0 && near(d[2], 1.0, 0.0005),
+          "normal incidence: ev=%d d=(%ld,%ld,%ld)", ev, (long)d[0], (long)d[1], (long)d[2]);
+
+    /* 30 deg, glass 1.5 -> air 1.0: sin(out) = 0.75 (worked example in docs) */
+    d[0] = FX_CONST(s30); d[1] = 0; d[2] = FX_CONST(c30);
+    ev = rt_boundary(d, 2, FX_CONST(1.5), FX_CONST(1.0));
+    CHECK(ev == RT_REFRACT && near(d[0], 0.75, 0.002) && near(d[2], 0.6614, 0.002),
+          "30deg dense->light: dx=%f dz=%f", d[0] / 65536.0, d[2] / 65536.0);
+
+    /* 30 deg, air 1.0 -> glass 1.5: sin(out) = 0.3333 */
+    d[0] = FX_CONST(s30); d[1] = 0; d[2] = FX_CONST(c30);
+    ev = rt_boundary(d, 2, FX_CONST(1.0), FX_CONST(1.5));
+    CHECK(ev == RT_REFRACT && near(d[0], 0.33333, 0.002), "30deg light->dense: dx=%f", d[0] / 65536.0);
+
+    /* 50 deg > critical 41.8 deg: total internal reflection, dz flips */
+    d[0] = FX_CONST(s50); d[1] = 0; d[2] = FX_CONST(c50);
+    ev = rt_boundary(d, 2, FX_CONST(1.5), FX_CONST(1.0));
+    CHECK(ev == RT_TIR && near(d[0], s50, 0.002) && near(d[2], -c50, 0.002),
+          "50deg TIR: ev=%d dx=%f dz=%f", ev, d[0] / 65536.0, d[2] / 65536.0);
+
+    /* negative-going ray across x faces keeps its sign on refraction */
+    d[0] = -FX_CONST(c30); d[1] = FX_CONST(s30); d[2] = 0;
+    ev = rt_boundary(d, 0, FX_CONST(1.2), FX_CONST(1.3));
+    CHECK(ev == RT_REFRACT && d[0] < 0, "negative direction sign preserved");
+}
+
+static rt_path g_path;
+
+static void test_trace(void)
+{
+    uint8_t key[32];
+    int i, j, ok_len = 1, ok_inside = 1, total_tir = 0, total_wall = 0;
+    double flips = 0;
+    const int trials = 2000;
+    uint64_t seed = 0x1234567;
+
+    for (i = 0; i < 32; i++) key[i] = (uint8_t)(255 - i);
+    rc_key_init(&g_k1, key);
+
+    CHECK(rt_trace(&g_k1, 42, NULL) == rt_trace(&g_k1, 42, NULL), "trace determinism");
+    CHECK(rt_trace(&g_k1, 42, NULL) == rt_trace(&g_k1, 42, &g_path), "recording must not change result");
+    CHECK(g_path.count == RT_STEPS + 1, "path length %d", g_path.count);
+    CHECK(g_path.refract + g_path.tir + g_path.wall == RT_STEPS, "event counts");
+
+    for (i = 0; i < 300; i++) {
+        seed = rt_mix64(seed + 1);
+        rt_trace(&g_k1, seed, &g_path);
+        total_tir += g_path.tir; total_wall += g_path.wall;
+        for (j = 0; j < g_path.count; j++) {
+            const rt_point *pt = &g_path.pts[j];
+            int64_t len2 = (int64_t)pt->d[0] * pt->d[0] + (int64_t)pt->d[1] * pt->d[1] +
+                           (int64_t)pt->d[2] * pt->d[2];
+            double len = (double)len2 / 4294967296.0;
+            int a;
+            if (len < 0.995 || len > 1.005) ok_len = 0;
+            for (a = 0; a < 3; a++)
+                if (pt->p[a] < 0 || pt->p[a] > RC_GRID * FX_ONE) ok_inside = 0;
+        }
+    }
+    printf("  300 traces: avg %.1f TIR, %.1f wall bounces per %d events\n",
+           total_tir / 300.0, total_wall / 300.0, RT_STEPS);
+    CHECK(ok_len, "direction drifted from unit length");
+    CHECK(ok_inside, "ray left the crystal");
+    CHECK(total_tir > 0, "never saw total internal reflection");
+
+    /* avalanche of F: flip one input bit -> about 32 of 64 output bits change */
+    for (i = 0; i < trials; i++) {
+        uint64_t x, y;
+        seed = rt_mix64(seed + 7);
+        x = rt_trace(&g_k1, seed, NULL);
+        y = rt_trace(&g_k1, seed ^ (1ULL << (i % 64)), NULL);
+        flips += bit_diff(&x, &y, 8);
+    }
+    flips /= trials * 64.0;
+    printf("  F avalanche: %.2f%% of output bits flip per input bit\n", flips * 100);
+    CHECK(flips > 0.48 && flips < 0.52, "F avalanche %.4f", flips);
+}
+
 int main(void)
 {
     test_fixed();
@@ -259,6 +354,8 @@ int main(void)
     test_kdf_stream();
     test_chaos();
     test_key_schedule();
+    test_boundary_physics();
+    test_trace();
     printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }
