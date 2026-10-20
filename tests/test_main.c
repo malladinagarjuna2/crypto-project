@@ -6,6 +6,10 @@
 #include "sha256.h"
 #include "hmac.h"
 #include "hkdf.h"
+#include "keysched.h"
+#include "chaos.h"
+#include "grid.h"
+#include "sbox.h"
 
 static int g_fail = 0, g_pass = 0;
 
@@ -139,12 +143,122 @@ static void test_hkdf(void)
     (void)from_hex;
 }
 
+/* ---------------- Phase 2: key schedule, chaos, crystal, S-box ---------------- */
+static rc_key g_k1, g_k2;     /* large structs: keep off the stack */
+
+static void test_kdf_stream(void)
+{
+    uint8_t seed[32], all[100], parts[100];
+    kdf_stream a, b;
+    size_t i;
+
+    memset(seed, 7, sizeof seed);
+    kdf_stream_init(&a, seed, "test");
+    kdf_stream_read(&a, all, sizeof all);
+    kdf_stream_init(&b, seed, "test");
+    for (i = 0; i < sizeof parts; i += 7)
+        kdf_stream_read(&b, parts + i, (sizeof parts - i) < 7 ? sizeof parts - i : 7);
+    CHECK(memcmp(all, parts, sizeof all) == 0, "kdf_stream chunked reads must match");
+
+    kdf_stream_init(&b, seed, "other");
+    kdf_stream_read(&b, parts, sizeof parts);
+    CHECK(memcmp(all, parts, sizeof all) != 0, "different label must give different stream");
+}
+
+static void test_chaos(void)
+{
+    chaos_state s;
+    uint8_t seed[16];
+    uint32_t prev = 0;
+    int i, repeats = 0, bounded = 1;
+
+    for (i = 0; i < 16; i++) seed[i] = (uint8_t)(i * 37 + 1);
+    chaos_init(&s, seed);
+    for (i = 0; i < 5000; i++) {
+        uint32_t v = chaos_sample(&s);
+        int j;
+        if (v == prev) repeats++;
+        prev = v;
+        for (j = 0; j < 4; j++)
+            if (s.v[j] <= -FX_CONST(1000.0) || s.v[j] >= FX_CONST(1000.0)) bounded = 0;
+    }
+    CHECK(repeats < 5, "chaos output stuck (%d repeats)", repeats);
+    CHECK(bounded, "chaos orbit hit the clamp limit");
+}
+
+static int bit_diff(const void *a, const void *b, size_t n)
+{
+    const uint8_t *x = (const uint8_t *)a, *y = (const uint8_t *)b;
+    int d = 0;
+    size_t i;
+    for (i = 0; i < n; i++) {
+        uint8_t v = x[i] ^ y[i];
+        while (v) { d += v & 1; v >>= 1; }
+    }
+    return d;
+}
+
+static void test_key_schedule(void)
+{
+    uint8_t key[32], inv[256];
+    int x, y, z, in_range = 1, diff_cells = 0, low_bits = 0, i, ok;
+    const int cells = RC_GRID * RC_GRID * RC_GRID;
+
+    for (i = 0; i < 32; i++) key[i] = (uint8_t)i;
+    rc_key_init(&g_k1, key);
+    rc_key_init(&g_k2, key);
+    CHECK(memcmp(&g_k1, &g_k2, sizeof g_k1) == 0, "same key must give identical schedule");
+
+    for (z = 0; z < RC_GRID; z++) for (y = 0; y < RC_GRID; y++) for (x = 0; x < RC_GRID; x++) {
+        fx_t n = g_k1.grid[z][y][x];
+        if (n < GRID_N_MIN || n > GRID_N_MAX) in_range = 0;
+    }
+    CHECK(in_range, "grid value outside [1.0, 2.417]");
+
+    CHECK(sbox_is_permutation(g_k1.sbox), "sbox is not a permutation");
+    sbox_invert(g_k1.sbox, inv);
+    ok = 1;
+    for (i = 0; i < 256; i++) if (inv[g_k1.sbox[i]] != i) ok = 0;
+    CHECK(ok, "sbox inverse");
+
+    /* flip ONE key bit */
+    key[17] ^= 0x04;
+    rc_key_init(&g_k2, key);
+    for (z = 0; z < RC_GRID; z++) for (y = 0; y < RC_GRID; y++) for (x = 0; x < RC_GRID; x++) {
+        uint16_t a = (uint16_t)g_k1.grid[z][y][x], b = (uint16_t)g_k2.grid[z][y][x];
+        if (a != b) diff_cells++;
+        low_bits += bit_diff(&a, &b, 2);
+    }
+    {
+        double cell_frac = (double)diff_cells / cells;
+        double bit_frac = (double)low_bits / (cells * 16.0);
+        double rk_frac = bit_diff(g_k1.round_key, g_k2.round_key, sizeof g_k1.round_key) /
+                         (8.0 * sizeof g_k1.round_key);
+        printf("  key bit flip: %.2f%% of cells changed, %.2f%% of low-16 grid bits, "
+               "%.2f%% of round-key bits\n", cell_frac * 100, bit_frac * 100, rk_frac * 100);
+        CHECK(cell_frac > 0.99, "too few cells changed: %.4f", cell_frac);
+        CHECK(bit_frac > 0.45 && bit_frac < 0.55, "grid bit avalanche %.4f", bit_frac);
+        CHECK(rk_frac > 0.40 && rk_frac < 0.60, "round key avalanche %.4f", rk_frac);
+    }
+    CHECK(memcmp(g_k1.sbox, g_k2.sbox, 256) != 0, "sbox must change with key");
+    CHECK(memcmp(g_k1.mac_key, g_k2.mac_key, 32) != 0, "mac key must change with key");
+
+    rc_key_wipe(&g_k2);
+    {
+        static const rc_key zero;
+        CHECK(memcmp(&g_k2, &zero, sizeof zero) == 0, "rc_key_wipe");
+    }
+}
+
 int main(void)
 {
     test_fixed();
     test_sha256();
     test_hmac();
     test_hkdf();
+    test_kdf_stream();
+    test_chaos();
+    test_key_schedule();
     printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

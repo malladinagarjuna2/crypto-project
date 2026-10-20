@@ -2,7 +2,8 @@ CC      := gcc
 CFLAGS  ?= -std=c11 -O2 -Wall -Wextra -pedantic
 CFLAGS  += -Iinclude
 
-LIB_SRC := src/fixed.c src/sha256.c src/hmac.c src/hkdf.c
+LIB_SRC := src/fixed.c src/sha256.c src/hmac.c src/hkdf.c \
+           src/keysched.c src/chaos.c src/grid.c src/sbox.c
 LIB_OBJ := $(LIB_SRC:.c=.o)
 
 .PHONY: all test clean
