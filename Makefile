@@ -2,8 +2,13 @@ CC      := gcc
 CFLAGS  ?= -std=c11 -O2 -Wall -Wextra -pedantic
 CFLAGS  += -Iinclude
 
+SH      := sh
 ifeq ($(OS),Windows_NT)
 LDLIBS  := -ladvapi32
+# PowerShell/cmd usually don't have sh on PATH; fall back to Git for Windows' copy
+ifneq ($(wildcard C:/Program\ Files/Git/bin/sh.exe),)
+SH      := "C:/Program Files/Git/bin/sh.exe"
+endif
 endif
 
 LIB_SRC := src/fixed.c src/sha256.c src/hmac.c src/hkdf.c \
@@ -37,7 +42,7 @@ test: tests.exe
 	./tests.exe
 
 check-cli: refcrypt.exe
-	sh tests/cli_test.sh
+	$(SH) tests/cli_test.sh
 
 attack: attack.exe
 	./attack.exe
@@ -56,6 +61,8 @@ clean:
 #        -Wall -Wextra -pedantic  show lots of warnings to catch mistakes
 #        -Iinclude look for .h header files in the include/ folder
 #  - LDLIBS      : on Windows, link advapi32 (it provides CryptGenRandom).
+#  - SH          : the shell used for check-cli. In PowerShell "sh" is not
+#                  on PATH, so on Windows we use Git for Windows' sh.exe.
 #  - LIB_SRC     : all the cipher's source files. LIB_OBJ is the same
 #                  list with .c changed to .o (compiled object files).
 #  - refcrypt.exe: the command-line tool (src/main.c + library).
