@@ -11,6 +11,9 @@
 #include "grid.h"
 #include "sbox.h"
 #include "raytrace.h"
+#include "feistel.h"
+#include "mode.h"
+#include "rng.h"
 
 static int g_fail = 0, g_pass = 0;
 
@@ -345,6 +348,85 @@ static void test_trace(void)
     CHECK(flips > 0.48 && flips < 0.52, "F avalanche %.4f", flips);
 }
 
+/* ---------------- Phase 4: Feistel, CTR, HMAC ---------------- */
+static void test_feistel(void)
+{
+    uint8_t key[32], in[16], ct[16], back[16];
+    uint64_t s = 99;
+    int i, r, ok = 1, same = 0;
+
+    for (i = 0; i < 32; i++) key[i] = (uint8_t)(i * 3);
+    rc_key_init(&g_k1, key);
+
+    for (i = 0; i < 200; i++) {
+        int j;
+        for (j = 0; j < 16; j++) { s = rt_mix64(s + 1); in[j] = (uint8_t)s; }
+        feistel_encrypt_block(&g_k1, in, ct);
+        feistel_decrypt_block(&g_k1, ct, back);
+        if (memcmp(in, back, 16) != 0) ok = 0;
+        if (memcmp(in, ct, 16) == 0) same++;
+    }
+    CHECK(ok, "16-round Feistel round trip");
+    CHECK(same == 0, "encryption left a block unchanged");
+
+    ok = 1;
+    for (r = 1; r <= RC_ROUNDS; r++) {
+        uint64_t L = 0x0123456789abcdefULL, R = 0xfedcba9876543210ULL, L0 = L, R0 = R;
+        feistel_encrypt_rounds(&g_k1, &L, &R, r);
+        feistel_decrypt_rounds(&g_k1, &L, &R, r);
+        if (L != L0 || R != R0) ok = 0;
+    }
+    CHECK(ok, "reduced-round Feistel round trips (1..16)");
+}
+
+static void test_mode(void)
+{
+    static uint8_t pt[1100], sealed[1100 + RC_OVERHEAD], sealed2[1100 + RC_OVERHEAD], out[1100 + RC_OVERHEAD];
+    static const size_t lens[] = { 0, 1, 15, 16, 17, 31, 100, 1000, 1100 };
+    uint8_t key[32], nonce[RC_NONCE], nonce2[RC_NONCE];
+    size_t li, out_len;
+    int ok_rt = 1, ok_tamper = 1;
+
+    memset(key, 0x42, sizeof key);
+    rc_key_init(&g_k1, key);
+    CHECK(rng_bytes(nonce, RC_NONCE) == 0 && rng_bytes(nonce2, RC_NONCE) == 0, "rng_bytes");
+    CHECK(memcmp(nonce, nonce2, RC_NONCE) != 0, "two random nonces must differ");
+    for (li = 0; li < sizeof pt; li++) pt[li] = (uint8_t)(li * 7 + 3);
+
+    for (li = 0; li < sizeof lens / sizeof lens[0]; li++) {
+        size_t n = lens[li], total = n + RC_OVERHEAD, pos;
+        if (rc_seal(&g_k1, nonce, pt, n, sealed) != RC_OK) ok_rt = 0;
+        if (rc_open(&g_k1, sealed, total, out, &out_len) != RC_OK || out_len != n ||
+            memcmp(out, pt, n) != 0)
+            ok_rt = 0;
+        /* flip one bit in every byte position: every one must be rejected */
+        for (pos = 0; pos < total; pos += (total > 200 ? 37 : 1)) {
+            int rc;
+            sealed[pos] ^= 0x01;
+            rc = rc_open(&g_k1, sealed, total, out, &out_len);
+            if (rc == RC_OK) ok_tamper = 0;
+            sealed[pos] ^= 0x01;
+        }
+    }
+    CHECK(ok_rt, "seal/open round trip for all lengths");
+    CHECK(ok_tamper, "tampered ciphertext was accepted");
+    CHECK(rc_open(&g_k1, sealed, 10, out, &out_len) == RC_ERR_FORMAT, "short input rejected");
+
+    /* same plaintext, different nonce -> unrelated ciphertext */
+    rc_seal(&g_k1, nonce, pt, 64, sealed);
+    rc_seal(&g_k1, nonce2, pt, 64, sealed2);
+    {
+        int d = bit_diff(sealed + 16, sealed2 + 16, 64);
+        CHECK(d > 200 && d < 312, "nonce change should flip ~50%% of 512 bits, got %d", d);
+    }
+
+    /* wrong key -> authentication failure */
+    key[0] ^= 1;
+    rc_key_init(&g_k2, key);
+    rc_seal(&g_k1, nonce, pt, 64, sealed);
+    CHECK(rc_open(&g_k2, sealed, 64 + RC_OVERHEAD, out, &out_len) == RC_ERR_AUTH, "wrong key rejected");
+}
+
 int main(void)
 {
     test_fixed();
@@ -356,6 +438,8 @@ int main(void)
     test_key_schedule();
     test_boundary_physics();
     test_trace();
+    test_feistel();
+    test_mode();
     printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }
