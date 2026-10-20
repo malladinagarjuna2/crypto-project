@@ -4,3 +4,4 @@
 *.bin
 *.csv
 /tmp/
+tests/tmp/
