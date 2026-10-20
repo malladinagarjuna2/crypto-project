@@ -63,6 +63,7 @@ File      = "RFC1" ‖ nonce(12) ‖ CTR ciphertext ‖ HMAC-SHA256 tag(32)
 | Codebook attack, final cipher | ~1% (chance level) |
 | Ciphertext entropy | 7.99990 bits/byte |
 | Chi-square p / serial corr / monobit p / runs p | 0.128 / +0.0002 / 0.784 / 0.093 |
+| **10 MB run** (`--mb 10`): entropy / chi-square p / serial corr | 7.999984 / 0.936 / −0.00016 (all checks passed) |
 
 Throughput is about 140 KB/s. That's slow on purpose: every 16-byte block traces 16 rays × 48 boundary events in integer math.
 
