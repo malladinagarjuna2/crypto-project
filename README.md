@@ -84,6 +84,25 @@ This produces three programs:
 
 ---
 
+## Simulation GUI
+
+```sh
+mingw32-make all                 # the GUI drives the real refcrypt.exe / attack.exe
+python tools/refcrypt_gui.py     # needs: pip install matplotlib numpy
+```
+
+| Tab | What you see |
+|---|---|
+| 🔦 **Ray simulation** | An animated photon flying through the 3D crystal. Each refraction, total internal reflection and wall bounce is logged with the real n₁→n₂, incidence angle and critical angle. *Flip 1 bit & compare* shows a completely different path, with ~50% of F's output bits changing. |
+| 🔄 **Feistel rounds** | The 16 rounds of one block, filled in live. Click a round to see the ray its F used. A chart shows a 1-bit change spreading to ~64 of 128 bits (the avalanche effect), followed by an exact decryption check. |
+| 🔒 **Encrypt / Decrypt** | Colour-coded ciphertext (magic, nonce, ciphertext, tag). Buttons for *Tamper 1 bit*, *Wrong key* (both rejected) and *Encrypt again* (new nonce, ~50% of bits differ). |
+| 💎 **Crystal** | Slide through the 16 depth slices of the secret crystal, with a histogram of the refractive indices. |
+| ⚔ **Attack lab** | Runs the attack suite live, with PASS in green and FAIL in red. |
+
+The GUI uses two demo-only CLI commands: `refcrypt grid <key>` dumps the crystal and `refcrypt rounds <key> <hex32>` dumps the Feistel rounds. Both reveal key-derived data, so never use them with a real key.
+
+---
+
 ## How to test it
 
 ### 1. Automatic tests
@@ -187,7 +206,9 @@ crypto-project/
 │   └── main.c                 refcrypt command-line tool
 ├── attack/                    SAC, linearity, codebook attack, statistics
 ├── tests/                     unit tests + CLI test script
-└── tools/plot_ray.py          3D ray path plotter
+└── tools/
+    ├── refcrypt_gui.py        interactive simulation GUI (Tkinter + matplotlib)
+    └── plot_ray.py            3D ray path plotter
 ```
 
 Every source file ends with a plain-language **EXPLANATION** section describing what the code does.
