@@ -5,6 +5,7 @@
 #include "mode.h"
 #include "raytrace.h"
 #include "rng.h"
+#include "feistel.h"
 
 static rc_key g_key;
 
@@ -15,7 +16,9 @@ static void usage(void)
         "  refcrypt keygen <keyfile>                 create a random 256-bit key\n"
         "  refcrypt enc <keyfile> <in> <out>          encrypt a file\n"
         "  refcrypt dec <keyfile> <in> <out>          decrypt (and verify) a file\n"
-        "  refcrypt trace <keyfile> <hex64> [out.csv] dump one ray path as CSV\n");
+        "  refcrypt trace <keyfile> <hex64> [out.csv] dump one ray path as CSV\n"
+        "  refcrypt grid <keyfile> [out.csv]          dump the secret crystal as CSV\n"
+        "  refcrypt rounds <keyfile> <hex32>          show all 16 Feistel rounds of one block\n");
 }
 
 static uint8_t *read_file(const char *path, size_t *len, size_t extra)
@@ -133,6 +136,54 @@ static int cmd_trace(const char *hex, const char *csv)
     return 0;
 }
 
+static int cmd_grid(const char *csv)
+{
+    FILE *f = stdout;
+    int x, y, z;
+
+    if (csv && !(f = fopen(csv, "w"))) { perror(csv); return 1; }
+    fprintf(f, "z,y,x,n\n");
+    for (z = 0; z < RC_GRID; z++)
+        for (y = 0; y < RC_GRID; y++)
+            for (x = 0; x < RC_GRID; x++)
+                fprintf(f, "%d,%d,%d,%.6f\n", z, y, x, g_key.grid[z][y][x] / 65536.0);
+    if (csv) fclose(f);
+    return 0;
+}
+
+static int cmd_rounds(const char *hex)
+{
+    uint64_t L = 0, R = 0, L0, R0;
+    int i;
+
+    if (strlen(hex) != 32) {
+        fprintf(stderr, "rounds: block must be exactly 32 hex digits (16 bytes)\n");
+        return 1;
+    }
+    for (i = 0; i < 32; i++) {
+        int c = hex[i], v;
+        if (c >= '0' && c <= '9') v = c - '0';
+        else if (c >= 'a' && c <= 'f') v = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'F') v = c - 'A' + 10;
+        else { fprintf(stderr, "rounds: invalid hex digit '%c'\n", c); return 1; }
+        if (i < 16) L = (L << 4) | (uint64_t)v; else R = (R << 4) | (uint64_t)v;
+    }
+    L0 = L; R0 = R;
+
+    printf("round,L,R,f_in,f_out\n");
+    for (i = 0; i < RC_ROUNDS; i++) {
+        uint64_t f = feistel_f(&g_key, R, i), t;
+        printf("%d,%016llx,%016llx,%016llx,%016llx\n", i, (unsigned long long)L, (unsigned long long)R,
+               (unsigned long long)(R ^ g_key.round_key[i]), (unsigned long long)f);
+        t = L ^ f; L = R; R = t;
+    }
+    printf("out,%016llx,%016llx,,\n", (unsigned long long)L, (unsigned long long)R);
+    feistel_decrypt_rounds(&g_key, &L, &R, RC_ROUNDS);
+    printf("dec,%016llx,%016llx,%s,\n", (unsigned long long)L, (unsigned long long)R,
+           (L == L0 && R == R0) ? "ok" : "FAIL");
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     int rc;
@@ -145,6 +196,8 @@ int main(int argc, char **argv)
     if (strcmp(argv[1], "enc") == 0 && argc == 5)        rc = cmd_enc(argv[3], argv[4]);
     else if (strcmp(argv[1], "dec") == 0 && argc == 5)   rc = cmd_dec(argv[3], argv[4]);
     else if (strcmp(argv[1], "trace") == 0 && argc >= 4) rc = cmd_trace(argv[3], argc > 4 ? argv[4] : NULL);
+    else if (strcmp(argv[1], "grid") == 0)               rc = cmd_grid(argc > 3 ? argv[3] : NULL);
+    else if (strcmp(argv[1], "rounds") == 0 && argc == 4) rc = cmd_rounds(argv[3]);
     else { usage(); rc = 2; }
     rc_key_wipe(&g_key);
     return rc;
@@ -169,7 +222,15 @@ int main(int argc, char **argv)
  *    match, it prints AUTHENTICATION FAILED and writes nothing.
  *  - cmd_trace(): runs one ray (given as a hex number) through the
  *    crystal and writes every step as CSV, for tools/plot_ray.py.
- *  - main(): looks at the first word (keygen/enc/dec/trace), calls the
+ *  - cmd_grid(): writes all 4096 cells of the secret crystal (their
+ *    position and refractive index n) as CSV. The GUI uses it to draw
+ *    the crystal. It reveals key material, so it's for demos only.
+ *  - cmd_rounds(): encrypts one 16-byte block (given as 32 hex digits)
+ *    and prints L, R, the ray input (R XOR round key) and F's output for
+ *    every round, then the result and a decryption check. The GUI uses
+ *    it to animate the Feistel network. Also demo-only (shows round-key
+ *    related values).
+ *  - main(): looks at the first word (keygen/enc/dec/trace/grid/rounds), calls the
  *    right function, and wipes the key at the end.
  *
  * Example:
