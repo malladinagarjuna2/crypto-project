@@ -5,6 +5,9 @@ An educational encryption system written in **C11**. A secret 3D "crystal" of gl
 > ⚠️ **Learning project, not for real secrets.** This cipher has had no independent cryptanalysis. To protect real data, use AES-256-GCM or ChaCha20-Poly1305.
 
 📖 For the full illustrated explanation with interactive demos, open [`docs/how-it-works.html`](docs/how-it-works.html) in a browser.
+🎬 To watch the real cipher in action, run the **[simulation GUI](#simulation-gui)**: `python tools/refcrypt_gui.py`.
+
+![Ray simulation](docs/images/gui-ray-simulation.png)
 
 ---
 
@@ -13,11 +16,12 @@ An educational encryption system written in **C11**. A secret 3D "crystal" of gl
 2. [Requirements](#requirements)
 3. [Build](#build)
 4. [Usage](#usage)
-5. [How to test it](#how-to-test-it)
-6. [Results](#results)
-7. [Project layout](#project-layout)
-8. [Design decisions](#design-decisions)
-9. [Limitations](#limitations)
+5. [Simulation GUI](#simulation-gui)
+6. [How to test it](#how-to-test-it)
+7. [Results](#results)
+8. [Project layout](#project-layout)
+9. [Design decisions](#design-decisions)
+10. [Limitations](#limitations)
 
 ---
 
@@ -49,7 +53,7 @@ File format     "RFC1" ‖ nonce (12 B) ‖ CTR ciphertext ‖ HMAC-SHA256 tag (
 
 - GCC with C11 support (tested with **MinGW GCC 6.3** on Windows 11)
 - `make` (`mingw32-make` on Windows)
-- *Optional:* Python 3 + `matplotlib` to plot ray paths
+- *For the GUI and plots:* Python 3 with `matplotlib` and `numpy` (`pip install matplotlib numpy`). Tkinter is included with the standard Windows Python installer.
 
 No other libraries are needed. SHA-256, HMAC and HKDF are implemented in this repo.
 
@@ -80,26 +84,79 @@ This produces three programs:
 ./refcrypt.exe enc my.key notes.txt notes.enc       # encrypt (output = input size + 48 bytes)
 ./refcrypt.exe dec my.key notes.enc notes_back.txt  # verify tag, then decrypt
 ./refcrypt.exe trace my.key 0123456789abcdef ray.csv  # export one ray path as CSV
+./refcrypt.exe grid my.key crystal.csv              # demo only: export the crystal
+./refcrypt.exe rounds my.key 48656c6c6f2c20776f726c6421212121  # demo only: show 16 rounds
 ```
+
+Prefer clicking to typing? See the [Simulation GUI](#simulation-gui).
 
 ---
 
 ## Simulation GUI
 
+An interactive desktop app that **animates the cipher**: watch a photon fly through the secret crystal, watch the Feistel rounds scramble a block, then tamper with ciphertext and see it rejected. It doesn't reimplement anything. Every result comes from the real C programs (`refcrypt.exe`, `attack.exe`).
+
+### Run it
+
 ```sh
-mingw32-make all                 # the GUI drives the real refcrypt.exe / attack.exe
-python tools/refcrypt_gui.py     # needs: pip install matplotlib numpy
+mingw32-make all                  # 1. build the C programs first
+pip install matplotlib numpy      # 2. one-time (Tkinter ships with Python)
+python tools/refcrypt_gui.py      # 3. launch
 ```
 
-| Tab | What you see |
-|---|---|
-| 🔦 **Ray simulation** | An animated photon flying through the 3D crystal. Each refraction, total internal reflection and wall bounce is logged with the real n₁→n₂, incidence angle and critical angle. *Flip 1 bit & compare* shows a completely different path, with ~50% of F's output bits changing. |
-| 🔄 **Feistel rounds** | The 16 rounds of one block, filled in live. Click a round to see the ray its F used. A chart shows a 1-bit change spreading to ~64 of 128 bits (the avalanche effect), followed by an exact decryption check. |
-| 🔒 **Encrypt / Decrypt** | Colour-coded ciphertext (magic, nonce, ciphertext, tag). Buttons for *Tamper 1 bit*, *Wrong key* (both rejected) and *Encrypt again* (new nonce, ~50% of bits differ). |
-| 💎 **Crystal** | Slide through the 16 depth slices of the secret crystal, with a histogram of the refractive indices. |
-| ⚔ **Attack lab** | Runs the attack suite live, with PASS in green and FAIL in red. |
+A random key is generated at start-up. Use **🎲 New key / 📂 Load key… / 💾 Save key…** in the top bar to change it; every tab updates immediately.
 
-The GUI uses two demo-only CLI commands: `refcrypt grid <key>` dumps the crystal and `refcrypt rounds <key> <hex32>` dumps the Feistel rounds. Both reveal key-derived data, so never use them with a real key.
+### 🔦 Ray simulation
+
+![Ray simulation tab](docs/images/gui-ray-simulation.png)
+
+The heart of the demo. A yellow photon travels through the 16×16×16 crystal, whose faint dots are coloured by refractive index.
+
+- **Markers:** green = entry, black = refraction, red ✖ = total internal reflection, orange ■ = bounce off the outer wall.
+- **Event log:** explains every step with real numbers, e.g. `TIR x-face n 2.373→1.700 θ₁=79.0° > θc=45.7°`.
+- **Controls:** ▶ Play / ⏸ Pause, ⏭ *Next event* (step through one event at a time), ⏩ *End*, and a speed slider.
+- **Flip 1 bit & compare:** changes one input bit and relaunches. The old path stays grey, the new one takes a completely different route, and the panel reports how many of F's 64 output bits changed (ideal ≈ 50%).
+
+### 🔄 Feistel rounds
+
+![Feistel rounds tab](docs/images/gui-feistel-rounds.png)
+
+Type a 16-character block and press **Run 16 rounds**.
+
+- The table fills in round by round: L, R, the ray input `R ⊕ Kᵢ`, and F's output. Click any row to see the ray that round used.
+- The **avalanche chart** runs a second copy with one flipped bit and plots how many of the 128 state bits differ. It jumps to ~64 (random) within 2 rounds.
+- At the end it shows the ciphertext and confirms decryption gives back the exact original.
+
+### 🔒 Encrypt / Decrypt
+
+![Encrypt / Decrypt tab](docs/images/gui-encrypt-decrypt.png)
+
+The ciphertext is colour-coded: purple = `RFC1` magic, orange = random nonce, blue = ciphertext, green = HMAC tag.
+
+| Button | What it demonstrates |
+|---|---|
+| 🔒 Encrypt / 🔓 Decrypt | normal round trip |
+| ⚡ Tamper 1 bit | flips one bit (highlighted red). Decrypt then fails with **AUTHENTICATION FAILED** |
+| 🗝 Decrypt with wrong key | rejected, nothing decrypted |
+| 🔁 Encrypt again | same message, new nonce → ~50% of ciphertext bits differ |
+| 📂 Load file… / 💾 Save .enc… | encrypt any file and save the result |
+
+### 💎 Crystal
+
+![Crystal tab](docs/images/gui-crystal.png)
+
+Slide through the 16 depth layers of the key-generated crystal, and see the histogram of all 4,096 refractive indices (spread evenly between 1.0 and 2.417). Press **New key** and the entire crystal changes.
+
+### ⚔ Attack lab
+
+Runs `attack.exe` with your chosen number of megabytes and streams the report live (PASS in green, FAIL in red): avalanche matrix, linearity test, codebook attack and statistical tests. It takes about 45 s plus 7 s per MB.
+
+### Notes
+
+- The GUI uses two **demo-only** commands: `refcrypt grid` (dumps the crystal) and `refcrypt rounds` (dumps round values). They reveal key-derived data, so never use them with a real key.
+- **"refcrypt not built" on start-up:** run `mingw32-make all` in the project folder first.
+- **`ModuleNotFoundError: matplotlib`:** run `pip install matplotlib numpy` for the same Python you launch the GUI with.
+- Temporary files go in a system temp folder that is deleted when you close the window.
 
 ---
 
@@ -190,7 +247,9 @@ Throughput is about **140 KB/s**. That's slow by design: each 16-byte block trac
 ```
 crypto-project/
 ├── Makefile
-├── docs/how-it-works.html     interactive explainer
+├── docs/
+│   ├── how-it-works.html      interactive explainer
+│   └── images/                GUI screenshots used in this README
 ├── include/                   headers
 ├── src/
 │   ├── fixed.c                Q16.16 fixed-point maths
