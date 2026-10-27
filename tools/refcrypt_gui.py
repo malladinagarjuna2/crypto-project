@@ -192,6 +192,15 @@ def explain_event(pts, k, grid):
     return f"{ax_name}-face  n {n1:.3f}→{n2:.3f}  θ₁={theta:.1f}° > θc={crit:.1f}° → TIR"
 
 
+def make_canvas(fig, master):
+    """Embed a figure that fills whatever space it is given. Requesting a tiny
+    size stops large figures from overflowing the window on high-DPI screens;
+    matplotlib then resizes the figure to the real widget size."""
+    canvas = FigureCanvasTkAgg(fig, master=master)
+    canvas.get_tk_widget().configure(width=50, height=50)
+    return canvas
+
+
 def setup_axes3d(ax, title):
     ax.set_xlim(0, GRID); ax.set_ylim(0, GRID); ax.set_zlim(0, GRID)
     ax.set_xlabel("x"); ax.set_ylabel("y"); ax.set_zlabel("z (depth)")
@@ -217,14 +226,15 @@ class RayTab(ttk.Frame):
         self.frames, self.fi, self.logged = [], 0, -1
         self.playing, self.job = False, None
 
-        left = ttk.Frame(self)
-        left.pack(side="left", fill="both", expand=True)
+        # pack the control panel first so the expanding plot can't squeeze it
         right = ttk.Frame(self, padding=10)
         right.pack(side="right", fill="y")
+        left = ttk.Frame(self)
+        left.pack(side="left", fill="both", expand=True)
 
         self.fig = Figure(figsize=(7.2, 6.4), dpi=100)
         self.ax = self.fig.add_subplot(projection="3d")
-        self.canvas = FigureCanvasTkAgg(self.fig, master=left)
+        self.canvas = make_canvas(self.fig, left)
         self.canvas.get_tk_widget().pack(fill="both", expand=True)
 
         ttk.Label(right, text="Ray input (64-bit hex)", font=("Segoe UI", 10, "bold")).pack(anchor="w")
@@ -239,7 +249,7 @@ class RayTab(ttk.Frame):
         self.play_btn = ttk.Button(row, text="⏸ Pause", command=self.toggle_play, width=9)
         self.play_btn.pack(side="left")
         ttk.Button(row, text="⏭ Next event", command=self.step_event).pack(side="left", padx=3)
-        ttk.Button(row, text="⏩ End", command=self.finish, width=6).pack(side="left")
+        ttk.Button(row, text="⏩ End", command=self.finish).pack(side="left")
 
         ttk.Label(right, text="Speed").pack(anchor="w", pady=(8, 0))
         self.speed = tk.IntVar(value=3)
@@ -466,7 +476,7 @@ class FeistelTab(ttk.Frame):
         self.ax3 = self.fig.add_subplot(2, 1, 1, projection="3d")
         self.ax2 = self.fig.add_subplot(2, 1, 2)
         self.fig.subplots_adjust(hspace=0.35)
-        self.canvas = FigureCanvasTkAgg(self.fig, master=right)
+        self.canvas = make_canvas(self.fig, right)
         self.canvas.get_tk_widget().pack(fill="both", expand=True)
         self._reset_axes()
 
@@ -729,7 +739,7 @@ class CrystalTab(ttk.Frame):
         self.fig = Figure(figsize=(11, 5.6), dpi=100)
         self.ax = self.fig.add_subplot(1, 2, 1)
         self.axh = self.fig.add_subplot(1, 2, 2)
-        self.canvas = FigureCanvasTkAgg(self.fig, master=self)
+        self.canvas = make_canvas(self.fig, self)
         self.canvas.get_tk_widget().pack(fill="both", expand=True)
         self.cbar = None
         self.draw()
