@@ -6,6 +6,7 @@ An educational encryption system written in **C11**. A secret 3D "crystal" of gl
 
 📖 For the full illustrated explanation with interactive demos, open [`docs/how-it-works.html`](docs/how-it-works.html) in a browser.
 🎬 To watch the real cipher in action, run the **[simulation GUI](#simulation-gui)**: `python tools/refcrypt_gui.py`.
+🖥 For a presentation, open [`docs/presentation.pptx`](docs/presentation.pptx) (18 slides with speaker notes). To regenerate it: `python docs/make_presentation.py`.
 
 ![Ray simulation](docs/images/gui-ray-simulation.png)
 
